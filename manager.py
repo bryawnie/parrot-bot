@@ -17,3 +17,7 @@ def init(db_name='db.sqlite'):
 
 def run_bot():
     runner(token=environ.get('BOT_TOKEN'))
+
+if __name__ == '__main__':
+    # init()
+    run_bot()
