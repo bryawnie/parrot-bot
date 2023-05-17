@@ -8,9 +8,10 @@ from telegram.ext.filters import Filters
 from sqlite3 import connect
 from hashlib import sha3_256
 from datetime import datetime
+from random import randint
 
 DB_FILENAME = 'db.sqlite'
-
+BOT_KEYWORDS = []
 
 def start(update: Update, context: CallbackContext):
     """
@@ -111,12 +112,11 @@ def get_random_phrase():
 
 
 def unknown(update: Update, context: CallbackContext):
-    list_of_keywords = ['random', 'frase', 'frases', 'poroto', 'dodi', 'kebin', 'empeñar']
     message = update.message.text
     reply = False
     
-    for keyword in list_of_keywords:
-        if keyword in message.lower():
+    for keyword in BOT_KEYWORDS:
+        if keyword in message.lower() and randint(0, 1):
             reply = True
 
     if not reply:
