@@ -8,140 +8,156 @@ from telegram.ext.filters import Filters
 from sqlite3 import connect
 from hashlib import sha3_256
 from datetime import datetime
-from random import randint
+from random import random
 
-DB_FILENAME = 'db.sqlite'
-BOT_KEYWORDS = []
+def create_file(filename):
+    with open(filename, 'w') as f:
+        f.close()
 
-def start(update: Update, context: CallbackContext):
-    """
-        This function is called when the user sends the command /start.
-        It sends a welcome message to the user.
-    """    
-    user = update.message.from_user
-    update.message.reply_text(
-        f"Hola {user.first_name}!\n" +
-        "Presiona /comandos para ver la lista de comandos disponibles."
-    )
+class DatabaseInterface:
+    def __init__(self, db_path: str):
+        self.db_path = db_path
 
-
-def add_phrase(update: Update, context: CallbackContext):
-    """
-        Adds a phrase to the phrases table.
-    """
-    con = connect(DB_FILENAME)
-    cur = con.cursor()
-    user = update.message.from_user
-
-    try:
-        message_text = update.message.text.split(' ', 1)[1]
-        message_text = message_text.replace("'", '')
-        message_text = message_text.replace('"', '')
-        [ phrase, author ] = message_text.split('-')
-
-        phrase = phrase.strip()
-        author = author.strip()
-
-        tag = sha3_256(phrase.encode()).hexdigest()
-
-        cur.execute(f"INSERT INTO phrases (hash, author, phrase, added_by, added_at) VALUES ('{tag}', '{author}', '{phrase}', {user.id}, '{datetime.now()}')")
+    def db_query(self, query):
+        con = connect(self.db_path)
+        cur = con.cursor()
+        cur.execute(query)
         con.commit()
         con.close()
-
-        update.message.reply_text(
-            f"Se ha agregado la frase:\n" +
-            f"{phrase} - *{author}*\n" +
-            f"Id: `{tag[:8]}`", 
-            parse_mode='Markdown'
-        )
-    except Exception as e:
-        update.message.reply_text("Hubo un error procesando tu mensaje, por favor intenta de nuevo: /add <frase> - <autor>")
-
-
-def my_phrases(update: Update, context: CallbackContext):
-    """
-        Lists all the phrases created by the user.
-    """
-    con = connect(DB_FILENAME)
-    cur = con.cursor()
-
-    try:
-        user = update.message.from_user
-        phrases = cur.execute(f"SELECT * FROM phrases WHERE added_by={user.id}").fetchall()
-        con.close()
-        if len(phrases) == 0:
-            update.message.reply_text("No has agregado ninguna frase aún.")
-        else:
-            update.message.reply_text("Estas son tus frases:\n" + '\n'.join([f"`{phrase[0][:8]}`: {phrase[2]} (by *{phrase[1]}*)" for phrase in phrases]), parse_mode='Markdown')
-    except:
-        update.message.reply_text("Hubo un error procesando tu mensaje, por favor intenta de nuevo: /list")
-
-
-def remove_phrase(update: Update, context: CallbackContext):
-    """
-        Removes a phrase from the phrases table given its id (hash).
-    """
-    con = connect(DB_FILENAME)
-    cur = con.cursor()
-    user = update.message.from_user
-
-    try:
-        [ _, phrase_id ] = update.message.text.split(' ')
-        cur.execute(f"DELETE FROM phrases WHERE added_by={user.id} AND hash LIKE {phrase_id}*")
-        con.commit()
-        con.close()
-        update.message.reply_text("Se ha eliminado la frase.")
-    except:
-        update.message.reply_text("Hubo un error procesando tu mensaje, por favor intenta de nuevo: /remove <id_frase>")
-
-
-def ping(update: Update, context: CallbackContext):
-    update.message.reply_text("pong")
-
-
-def get_random_phrase():
-    con = connect(DB_FILENAME)
-    cur = con.cursor()
-
-    try:
-        phrase = cur.execute("SELECT * FROM phrases ORDER BY RANDOM() LIMIT 1").fetchone()
-        con.close()
-        return phrase
-    except:
-        return None
-
-
-def unknown(update: Update, context: CallbackContext):
-    message = update.message.text
-    reply = False
     
-    for keyword in BOT_KEYWORDS:
-        if keyword in message.lower() and randint(0, 1):
-            reply = True
+    def init_database(self):
+        """Creates a SQLite database and a table to save phrases"""
+        create_file(self.db_path)
+        self.db_query("CREATE TABLE phrases (chat_id, hash, author, phrase, added_at)")
+    
+    def save_phrase(self, **kwargs):
+        """Saves a phrase into database"""
+        chat_id = kwargs.get('chat_id')
+        author = kwargs.get('author').strip()
+        message = kwargs.get('message')
 
-    if not reply:
-        return
+        # Sanitize message
+        message = message.replace("'", '')
+        message = message.replace('"', '')
+        message = message.strip()
 
-    phrase = get_random_phrase()
-    if not phrase:
-        update.message.reply_text("No hay frases en la base de datos.")
-        return
+        # Hash
+        tag = sha3_256(message.encode()).hexdigest()
 
-    content = f"{phrase[2]}.\n- *{phrase[1]}*"
-    update.message.reply_text(content, parse_mode='Markdown')
+        self.db_query(f"INSERT INTO phrases (chat_id, hash, author, phrase, added_at) VALUES ({chat_id}, '{tag}', '{author}', '{phrase}', '{datetime.now()}')")
+
+    def delete_phrase(self, tag):
+        """Deletes from database the phrase with matching tag"""
+        self.db_query(f"DELETE FROM phrases WHERE hash LIKE {tag}*")
+
+    def get_random_phrase_for_chat(self, chat_id):
+        con = connect(self.db_path)
+        cur = con.cursor()
+        try:
+            phrase = cur.execute(f"SELECT phrase FROM phrases WHERE chat_id={chat_id} ORDER BY RANDOM() LIMIT 1").fetchone()
+            con.close()
+            return phrase[0]
+        except:
+            con.close()
+            return "No me entrenaron para esto :c"
+
+
+
+class ParrotBot:
+    def __init__(self, db_path):
+        self.db_interface = DatabaseInterface(db_path)
+        self.do_not_bother = []
+        self.sensibility = 0.1
+
+    def save_phrase_from_message(self, message):
+        try:
+            chat_id = message.chat_id
+            content = message.text
+            author = message.from_user.first_name
+            self.db_interface.save_phrase(
+                chat_id=chat_id,
+                message=content,
+                author=author,
+            )
+        except Exception as e:
+            print(f"Error processing message from {author}:") 
+            print(e)
+
+
+    def start(self, update: Update, context: CallbackContext):
+        """
+            This function is called when the user sends the command /start.
+            It sends a welcome message to the user.
+        """    
+        user = update.message.from_user
+        update.message.reply_text(
+            f"Hola {user.first_name}!\n" +
+            "Soy un bot que sólo sabe repetir cosas que alguien más dijo en este mismo " +
+            "chat pero de forma random y sin contexto alguno."
+        )
+
+
+    def remove_phrase(self, update: Update, context: CallbackContext):
+        """Removes a phrase from the phrases table given its hash."""
+        try:
+            [ _, phrase_id ] = update.message.text.split(' ')
+            self.db_interface.delete_phrase(phrase_id)
+            update.message.reply_text("Se ha eliminado la frase.")
+        except:
+            update.message.reply_text("Hubo un error procesando tu mensaje, por favor intenta de nuevo: /remove <id_frase>")
+
+
+    def silence(self, update: Update, context: CallbackContext):
+        """Silences the bot in current chat"""
+        chat_id = update.message.chat_id
+        if chat_id in self.do_not_bother:
+            update.message.reply_text("Pero si ya estoy calladito :c")
+        else:
+            self.do_not_bother.append(chat_id)
+            update.message.reply_text("Okidoki, calladín bombín!")
+
+
+    def activate(self, update: Update, context: CallbackContext):
+        chat_id = update.message.chat_id
+        if chat_id in self.do_not_bother:
+            self.do_not_bother.remove(chat_id)
+        else:
+            update.message.reply_text("Voy a cucharear en conversaciones a lo sapo :)")
+
+
+    def ping(self, update: Update, context: CallbackContext):
+        """Testing command"""
+        update.message.reply_text("pong")
+
+
+    def default(self, update: Update, context: CallbackContext):
+        chat_id = update.message.chat_id
+        message = update.message.text
+
+        if chat_id in self.do_not_bother:
+            return
+
+        # Response conditions
+        if random() < self.sensibility or "kebin" in message.lower():
+            response = self.db_interface.get_random_phrase_for_chat(chat_id)
+            update.message.reply_text(response)
+        
+        # Save conditions
+        # WIP
+        # update.message.reply_text(content, parse_mode='Markdown')
 
 
 def runner(token: str):
     updater = Updater(token, use_context=True)
+    parrot_bot = ParrotBot(db_path='db.sqlite')
     
-    updater.dispatcher.add_handler(CommandHandler('start', start))
-    updater.dispatcher.add_handler(CommandHandler('add', add_phrase))
-    updater.dispatcher.add_handler(CommandHandler('list', my_phrases))
-    updater.dispatcher.add_handler(CommandHandler('remove', remove_phrase))
+    updater.dispatcher.add_handler(CommandHandler('start', parrot_bot.start))
+    updater.dispatcher.add_handler(CommandHandler('remove', parrot_bot.remove_phrase))
+    updater.dispatcher.add_handler(CommandHandler('silence', parrot_bot.silence))
+    updater.dispatcher.add_handler(CommandHandler('activate', parrot_bot.activate))
+    updater.dispatcher.add_handler(CommandHandler('ping', parrot_bot.ping))
 
-    updater.dispatcher.add_handler(CommandHandler('ping', ping))
-
-    updater.dispatcher.add_handler(MessageHandler(Filters.text, unknown))
+    updater.dispatcher.add_handler(MessageHandler(Filters.text, parrot_bot.default))
     #updater.dispatcher.add_handler(MessageHandler(Filters.command, unknown))
 
     updater.start_polling()

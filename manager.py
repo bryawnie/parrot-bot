@@ -25,6 +25,6 @@ def run_bot():
     runner(token=environ.get('BOT_TOKEN'))
 
 if __name__ == '__main__':
-    if not path.exists(DB_PATH):
-        init_database(DB_PATH)
+    # if not path.exists(DB_PATH):
+    #     init_database(DB_PATH)
     run_bot()
